@@ -58,7 +58,6 @@ Basic security principles are incorporated into the design, including:
 
 By managing the entire infrastructure as code, this project demonstrates how
 cloud environments can be deployed consistently, securely, and reproducibly.
-``
 
 ---
 
