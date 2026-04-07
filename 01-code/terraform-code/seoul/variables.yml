@@ -1,0 +1,276 @@
+# AWS 인프라 구성 변수 파일 (서울 리전)
+
+# 리전 설정
+region: ap-northeast-2
+region_name: seoul
+
+# Terraform Remote State Backend 설정
+terraform_backend:
+  enabled: true
+  bucket_name: "seoul-s3-js"
+  dynamodb_table_name: "terraform-state-lock-seoul-js"
+
+# VPC 네트워크 설정
+cidr_block: "10.2.0.0/16"
+az_count: 2
+public_subnet_count: 2
+private_subnet_count: 2
+subnet_bits: 8
+
+# 보안 그룹 설정
+sg: 
+  web: 
+    ingress_rules:
+      ssh: 
+        protocol: tcp
+        from_port: 22 
+        to_port: 22
+        cidr_blocks:
+          - 0.0.0.0/0
+      http:
+        protocol: tcp
+        from_port: 80
+        to_port: 80
+        cidr_blocks:
+          - 0.0.0.0/0
+      https:
+        protocol: tcp
+        from_port: 443
+        to_port: 443
+        cidr_blocks:
+          - 0.0.0.0/0
+      icmp:
+        protocol: icmp
+        from_port: 8
+        to_port: 0
+        cidr_blocks:
+          - 0.0.0.0/0
+    egress_rules: 
+      all:
+        protocol: -1
+        from_port: 0
+        to_port: 0
+        cidr_blocks:
+          - 0.0.0.0/0
+
+  rds: 
+    ingress_rules:
+      mysql: 
+        protocol: tcp
+        from_port: 3306 
+        to_port: 3306
+        cidr_blocks:
+          - 0.0.0.0/0
+    egress_rules: {}
+
+
+  lb:
+    ingress_rules:
+      http:
+        protocol: tcp
+        from_port: 80 
+        to_port: 80
+        cidr_blocks:
+          - 0.0.0.0/0
+      ssh:
+        protocol: tcp
+        from_port: 22 
+        to_port: 22
+        cidr_blocks:
+          - 0.0.0.0/0
+    egress_rules:
+      http:
+        protocol: tcp
+        from_port: 80 
+        to_port: 80
+        cidr_blocks:
+          - 10.2.0.0/16
+    
+# AMI 이미지 설정
+ami_images:
+  project-mega: "ami-009df9195e694eb80"
+
+# SSH 키페어 설정
+key_info:
+  algorithm: "RSA"
+  rsa_bits: 2048
+
+# EC2 인스턴스 설정 (count=0이면 생성 안함)
+ec2_instances: 
+  web: 
+    count: 0
+    ami: ami-07b70db997adb22fb
+    instance_type: t3.micro
+    sg_name: web
+    public: true
+    user_data: |
+      #!/bin/bash
+      dnf install -yq httpd
+      systemctl start httpd
+      systemctl enable httpd
+  db: 
+    count: 0
+    ami: ami-07b70db997adb22fb
+    instance_type: t3.micro
+    sg_name: db
+    public: false
+    user_data:
+    
+
+# Launch Template 설정
+templates: 
+  wp-dynamic: 
+    name: "seoul-template-js"
+    description: "template for auto-scailing-dynamic"
+    ami_name: project-mega
+    public: true
+    sg_name: web
+
+# Target Group 설정
+target_group:
+  target_type: instance
+  name: seoul-targetgroup-js
+  protocol: "HTTP"
+  port: 80
+  ip_address_type: "ipv4"
+  protocol_version: "HTTP1"
+  health_check:
+    protocol: "HTTP"
+    path: "/index.php"
+    port: "traffic-port"
+    healthy_threshold: 2
+    unhealthy_threshold: 10
+    timeout: 20
+    interval: 30
+    matcher: "200-399"
+
+# Load Balancer 설정
+load_balancer: 
+  load_balancer_type: application
+  name: seoul-loadbalancer-js
+  internal: false
+  ip_address_type: ipv4
+  sg_name: lb
+
+load_balancer_listener:
+  protocol: HTTP
+  port: 80
+  type: forward
+
+# Auto Scaling Group 설정
+autoscaling_group:
+  name: "seoul-autoscaling-js"
+  health_check_type: "ELB"
+  health_check_grace_period: 600
+  min_size: 2
+  desired_capacity: 2
+  max_size: 4
+  launch_template:
+    instance_type:
+      t3.micro: "1"
+    template_name: wp-dynamic
+
+# Auto Scaling Policy 설정
+autoscaling_policy: 
+  policy_type: TargetTrackingScaling 
+  name: TargetTrackingScaling
+  estimated_instance_warmup: 60
+  config: 
+    metric_type: ASGAverageCPUUtilization
+    target_value: 60
+
+# Route53 DNS 레코드 설정
+route53_records:
+  www:
+    zone_id: "Z02875252GV55V087N9PO"
+    name: "www.js.it-edu.org"
+    ttl: 60
+    target_type: "lb"
+  
+  database:
+    zone_id: "Z02875252GV55V087N9PO"
+    name: "database.js.it-edu.org"
+    ttl: 60
+    target_type: "rds"
+
+# RDS 설정
+rds_subnet_group:
+  name: "seoul-dbinstance-js"
+  description: "db_subnet group for mysql-cluster"
+
+# ⚠️ RDS 비밀번호는 환경변수로 관리 (RDS_PASSWORD 필수)
+db_instance:
+  engine: "mariadb"
+  engine_version: "11.4.5"
+  identifier: "seoul-db-js"
+  snapshot_identifier: "wordpress-db"
+  username: "root"
+  password: ""  # 환경변수 RDS_PASSWORD에서 설정
+  instance_class: "db.t4g.micro"
+  storage_type: "gp3"
+  allocated_storage: 20
+  multi_az: false
+  publicly_accessible: false
+  sg_names: ["rds"]
+
+# WAF 설정
+waf:
+  name: "seoul-waf-js"
+  description: "SQL Injection protection for WordPress"
+  scope: "REGIONAL"
+  default_action: "allow"
+  rule_name: "SQLinjection-Rule"
+  rule_priority: 1
+  rule_override_action: "none"
+  managed_rule_vendor: "AWS"
+  managed_rule_name: "AWSManagedRulesSQLiRuleSet"
+  visibility:
+    cloudwatch_metrics_enabled: true
+    metric_name: "WordPressWAF"
+    sampled_requests_enabled: true
+  rule_visibility:
+    cloudwatch_metrics_enabled: true
+    metric_name: "SQLiRuleMetric"
+    sampled_requests_enabled: true
+  managed_rules:
+    - rule_name: "SQLi-Rule"
+      managed_rule_name: "AWSManagedRulesSQLiRuleSet"
+      priority: 1
+      override_action: "none"
+      vendor: "AWS"
+      visibility:
+        cloudwatch_metrics_enabled: true
+        metric_name: "SQLiRuleMetric"
+        sampled_requests_enabled: true
+    - rule_name: "WordPress-Rule"
+      managed_rule_name: "AWSManagedRulesWordPressRuleSet"
+      priority: 3
+      override_action: "none"
+      vendor: "AWS"
+      visibility:
+        cloudwatch_metrics_enabled: true
+        metric_name: "WordPressRuleMetric"
+        sampled_requests_enabled: true
+    - rule_name: "Common-Rule"
+      managed_rule_name: "AWSManagedRulesCommonRuleSet"
+      priority: 4
+      override_action: "none"
+      vendor: "AWS"
+      visibility:
+        cloudwatch_metrics_enabled: true
+        metric_name: "CommonRuleMetric"
+        sampled_requests_enabled: true
+  rate_based_rule:
+    enabled: true
+    rule_name: "BruteForce-Rule"
+    rule_priority: 2
+    limit: 15
+    evaluation_window_sec: 300
+    login_paths:
+      - "/wp-login.php"
+      - "/login"
+    action: "block"
+    visibility:
+      cloudwatch_metrics_enabled: true
+      metric_name: "BruteForceRuleMetric"
+      sampled_requests_enabled: true
